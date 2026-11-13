@@ -28,6 +28,13 @@ ICONS = {
         "     `-'     ",
         "    /   \\    ",
     ],
+    "moon": [
+        "     _.-.    ",
+        "   .' .-'    ",
+        "  /  /       ",
+        "  \\  '-.     ",
+        "   '-.__'    ",
+    ],
     "cloud": [
         "             ",
         "     .--.    ",
@@ -115,18 +122,30 @@ def find_city(name: str) -> dict | None:
     return results[0] if results else None
 
 
-def get_current_weather(latitude: float, longitude: float) -> dict:
-    """Fetch the current weather for a pair of coordinates."""
+def get_current_weather(latitude: float, longitude: float) -> tuple[dict, dict]:
+    """Fetch the current weather and today's sunrise/sunset for a pair of coordinates.
+
+    Returns (current, daily). `current["is_day"]` is 1 while the sun is up and 0
+    when it's dark. Times are in the city's own timezone (timezone=auto).
+    """
     data = get_json(
         FORECAST_URL,
         {
             "latitude": latitude,
             "longitude": longitude,
-            "current": "temperature_2m,wind_speed_10m,wind_direction_10m,weather_code",
+            "current": "temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day",
+            "daily": "sunrise,sunset",
+            "timezone": "auto",
+            "forecast_days": 1,
             "wind_speed_unit": "ms",
         },
     )
-    return data["current"]
+    return data["current"], data["daily"]
+
+
+def clock_time(iso_time: str) -> str:
+    """Turn an ISO time like '2026-11-13T07:42' into '07:42'."""
+    return iso_time.split("T")[1][:5]
 
 
 def degrees_to_compass(degrees: float) -> str:
@@ -147,13 +166,17 @@ def main() -> None:
         if city is None:
             print(f"Could not find a city called {city_name!r}.")
             sys.exit(1)
-        weather = get_current_weather(city["latitude"], city["longitude"])
+        weather, daily = get_current_weather(city["latitude"], city["longitude"])
     except urllib.error.URLError as error:
         print(f"Network error: {error.reason}")
         sys.exit(1)
 
     code = weather["weather_code"]
     description, icon_name = WEATHER_CODES.get(code, (f"Unknown (code {code})", "cloud"))
+    is_day = weather.get("is_day", 1) == 1
+    # There's no sun to show once it's dark, so swap in the moon.
+    if not is_day and icon_name == "sun":
+        icon_name = "moon"
     icon = ICONS[icon_name]
 
     # Build the place name, skipping parts that are missing (e.g. no region).
@@ -162,12 +185,16 @@ def main() -> None:
     )
     wind_dir = degrees_to_compass(weather["wind_direction_10m"])
 
+    sunrise = clock_time(daily["sunrise"][0])
+    sunset = clock_time(daily["sunset"][0])
+    local_time = clock_time(weather["time"])
+
     text_lines = [
         place,
-        description,
+        f"{description} ({'day' if is_day else 'night'}, {local_time} local time)",
         f"Temperature: {weather['temperature_2m']:.1f} °C",
         f"Wind:        {weather['wind_speed_10m']:.1f} m/s from {wind_dir}",
-        "",
+        f"Sun:         rises {sunrise}, sets {sunset}",
     ]
 
     # zip() pairs each icon line with a text line so we can print them side by side.
